@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger("star_bot")
 
 CHART_CONTEXT_CANDLES = 40
-PATTERN_CHECK_LIMIT = 25
+PATTERN_CHECK_LIMIT = 50
 
 
 class StarBot:
@@ -133,11 +133,14 @@ class StarBot:
             return []
 
         window = candles[:c3_idx + 1]
+        price = candles[c3_idx][4] if c3_idx < len(candles) else 0
+        min_atr = price * self.config.min_atr_multiplier
         return detect_patterns(
             candles=window,
             symbol=symbol,
             timeframe=tf,
             tf_ms=tf_ms,
+            min_atr=min_atr,
         )
 
     async def _fetch_chart_candles(self, symbol: str, tf: str) -> list | None:

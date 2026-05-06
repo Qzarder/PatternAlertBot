@@ -14,6 +14,7 @@ class Config:
     min_volume_usd: float = float(os.getenv("MIN_VOLUME_USD", "20000000"))
     timeframes: list[str] = field(default_factory=lambda: os.getenv("TIMEFRAMES", "1d,12h,4h,1h").split(","))
     check_interval_sec: int = int(os.getenv("CHECK_INTERVAL_SEC", "60"))
+    min_atr_multiplier: float = float(os.getenv("MIN_ATR_MULTIPLIER", "0.0005"))
 
     def validate(self) -> list[str]:
         errors = []

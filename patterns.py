@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class PatternType(Enum):
@@ -226,6 +229,7 @@ def _check_morning_star(
     downtrend = (ctx1_close < ctx2_close < cl1) or (ctx2[4] < ctx2[1] and ctx1[4] < ctx1[1])
     if not downtrend:
         if cl1 < ema:
+            logger.debug(f"MS rejected by EMA gate: {symbol} {timeframe} cl1={cl1:.4f} ema={ema:.4f}")
             return None
 
     # --- confidence scoring ---
@@ -238,15 +242,15 @@ def _check_morning_star(
     elif penetration >= 0.6:
         score += 0.05
 
-    if rsi < 30:
+    if cl1 < 30:
         score += 0.15
         reasons.append(f"RSI={rsi:.1f}<30")
     elif rsi < 40:
         score += 0.05
 
-    if cl1 > ema:
+    if cl1 < ema:
         score += 0.1
-        reasons.append("price>EMA20")
+        reasons.append("price<EMA20")
 
     if is_hammer:
         score += 0.15
@@ -371,6 +375,7 @@ def _check_evening_star(
     uptrend = (ctx1_close > ctx2_close > cl1) or (ctx2[4] > ctx2[1] and ctx1[4] > ctx1[1])
     if not uptrend:
         if cl1 < ema:
+            logger.debug(f"ES rejected by EMA gate: {symbol} {timeframe} cl1={cl1:.4f} ema={ema:.4f}")
             return None
 
     # --- confidence scoring ---
