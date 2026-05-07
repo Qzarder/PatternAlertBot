@@ -121,15 +121,26 @@ class StarBot:
                 await asyncio.sleep(5)
 
     async def _check_symbol(self, symbol: str, tf: str, candle_ts: int, tf_ms: int) -> list:
-        candles = await self.exchange.fetch_and_validate(symbol, tf, limit=PATTERN_CHECK_LIMIT)
-
+        candles = None
         c3_idx = None
-        for i in range(len(candles) - 1, -1, -1):
-            if candles[i][0] == candle_ts:
-                c3_idx = i
-                break
 
-        if c3_idx is None or c3_idx < 19:
+        for attempt in range(4):
+            candles = await self.exchange.fetch_and_validate(symbol, tf, limit=PATTERN_CHECK_LIMIT)
+            for i in range(len(candles) - 1, -1, -1):
+                if candles[i][0] == candle_ts:
+                    c3_idx = i
+                    break
+            if c3_idx is not None:
+                break
+            if attempt < 3:
+                await asyncio.sleep(3)
+
+        if c3_idx is None:
+            logger.debug(f"[{symbol} {tf}] candle_ts not in API after {4} attempts, skipping")
+            return []
+
+        if c3_idx < 19:
+            logger.debug(f"[{symbol} {tf}] too few candles before C3 (c3_idx={c3_idx}, need>=19), skipping")
             return []
 
         window = candles[:c3_idx + 1]
