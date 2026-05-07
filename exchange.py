@@ -72,27 +72,33 @@ class BinanceFutures:
         tickers = await self.fetch_tickers()
         now = datetime.now(timezone.utc)
         liquid = []
+        total_usdt = 0
+
+        day_fraction = max((now.hour + now.minute / 60 + now.second / 3600) / 24, 0.01)
+        early_day = day_fraction < 0.25
 
         for symbol, ticker in tickers.items():
             if not symbol.endswith("USDT"):
                 continue
-            if not ticker.get("quoteVolume"):
-                continue
+            total_usdt += 1
 
-            quote_volume = ticker["quoteVolume"]
+            quote_volume = ticker.get("quoteVolume")
             if quote_volume is None:
                 continue
 
-            if quote_volume >= min_volume_usd:
+            projected = quote_volume / day_fraction
+
+            if projected >= min_volume_usd:
                 liquid.append(symbol)
                 continue
 
-            hours_since_midnight = now.hour + now.minute / 60 + now.second / 3600
-            if hours_since_midnight < 6 and quote_volume < min_volume_usd:
+            if early_day:
                 prev_day_volume = await self._get_prev_day_volume(symbol)
                 if prev_day_volume and prev_day_volume >= min_volume_usd:
                     liquid.append(symbol)
 
+        logger.info(f"Ticker returned {total_usdt} USDT pairs, {len(liquid)} passed volume filter "
+                    f"(day_fraction={day_fraction:.2f})")
         return liquid
 
     async def _get_prev_day_volume(self, symbol: str) -> Optional[float]:
