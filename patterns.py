@@ -1,9 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
-import logging
-
-logger = logging.getLogger(__name__)
 
 
 class PatternType(Enum):
@@ -19,10 +16,11 @@ class PatternResult:
     confidence: str
     description: str
     score: float
+    c3_timestamp: int = 0
 
 
 # ============================================================================
-# Вспомогательные индикаторы
+# Индикаторы
 # ============================================================================
 
 def _closes(candles: List[List]) -> List[float]:
@@ -78,17 +76,38 @@ def _avg_volume(candles: List[List], period: int = 20) -> float:
     return sum(c[5] for c in samples if len(c) > 5) / len(samples)
 
 
-def _sequential_check(candles: List[List], tf_ms: int) -> bool:
-    if len(candles) < 5:
-        return False
-    for i in range(1, 5):
-        if candles[-i][0] - candles[-(i + 1)][0] != tf_ms:
-            return False
-    return True
+def _history_valid(candles: List[List], tf_ms: int) -> bool:
+    if len(candles) < 2:
+        return True
+    gaps = 0
+    for i in range(1, len(candles)):
+        if candles[i][0] - candles[i - 1][0] != tf_ms:
+            gaps += 1
+    return gaps <= 3
 
 
 # ============================================================================
-# Основной детектор
+# Тренд по 5 свечам контекста
+# ============================================================================
+
+def _is_uptrend(ctx: List[List]) -> bool:
+    if len(ctx) < 3:
+        return True
+    closes = [c[4] for c in ctx]
+    bullish_count = sum(1 for c in ctx if c[4] > c[1])
+    return bullish_count >= 3 and closes[-1] > closes[0]
+
+
+def _is_downtrend(ctx: List[List]) -> bool:
+    if len(ctx) < 3:
+        return True
+    closes = [c[4] for c in ctx]
+    bearish_count = sum(1 for c in ctx if c[4] < c[1])
+    return bearish_count >= 3 and closes[-1] < closes[0]
+
+
+# ============================================================================
+# Основной детектор — только последняя свеча окна
 # ============================================================================
 
 def detect_patterns(
@@ -98,7 +117,7 @@ def detect_patterns(
     tf_ms: int = 0,
     min_atr: float = 0.0,
 ) -> List[PatternResult]:
-    if len(candles) < 20:
+    if len(candles) < 25:
         return []
 
     cl = _closes(candles)
@@ -110,44 +129,51 @@ def detect_patterns(
     if min_atr > 0 and atr_val < min_atr:
         return []
 
-    if tf_ms > 0 and not _sequential_check(candles, tf_ms):
+    if tf_ms > 0 and not _history_valid(candles, tf_ms):
         return []
 
-    ctx1 = candles[-5]
-    ctx2 = candles[-4]
+    # Паттерн: candles[-3]=C1, candles[-2]=C2, candles[-1]=C3
+    # Тренд: candles[-8:-3] = 5 свечей перед C1
     c1 = candles[-3]
     c2 = candles[-2]
     c3 = candles[-1]
+    trend_ctx = candles[-8:-3] if len(candles) >= 8 else candles[:-3]
+
+    if tf_ms > 0:
+        if (c2[0] - c1[0] != tf_ms) or (c3[0] - c2[0] != tf_ms):
+            return []
 
     price = c3[4]
     has_volume = len(c1) > 5 and all(len(c) > 5 for c in [c1, c2, c3])
 
     results = []
     ms = _check_morning_star(
-        ctx1, ctx2, c1, c2, c3,
+        trend_ctx, c1, c2, c3,
         symbol, timeframe, atr_val, rsi_val, ema_val,
         avg_vol if has_volume else 0.0, has_volume, price
     )
     if ms:
+        ms.c3_timestamp = c3[0]
         results.append(ms)
 
     es = _check_evening_star(
-        ctx1, ctx2, c1, c2, c3,
+        trend_ctx, c1, c2, c3,
         symbol, timeframe, atr_val, rsi_val, ema_val,
         avg_vol if has_volume else 0.0, has_volume, price
     )
     if es:
+        es.c3_timestamp = c3[0]
         results.append(es)
 
     return results
 
 
 # ============================================================================
-# Morning Star — ПЕРЕРАБОТАНО зеркально Evening Star
+# Morning Star
 # ============================================================================
 
 def _check_morning_star(
-    ctx1, ctx2, c1, c2, c3,
+    trend_ctx, c1, c2, c3,
     symbol: str, timeframe: str,
     atr: float, rsi: float, ema: float,
     avg_vol: float, has_volume: bool, price: float
@@ -160,9 +186,8 @@ def _check_morning_star(
     body2 = abs(cl2 - o2)
     body3 = abs(cl3 - o3)
     hl1 = h1 - l1
-    hl3 = h3 - l3
 
-    if body1 == 0 or body3 == 0 or hl1 == 0 or hl3 == 0:
+    if body1 == 0 or body3 == 0 or hl1 == 0:
         return None
     if cl1 >= o1:
         return None
@@ -170,110 +195,85 @@ def _check_morning_star(
         return None
 
     lower_wick2 = min(o2, cl2) - l2
-    upper_wick2 = h2 - max(o2, cl2)
-    lower_wick3 = min(o3, cl3) - l3
-    upper_wick3 = h3 - max(o3, cl3)
 
-    # --- минимальное тело относительно цены (защита от пылевых альтов) ---
-    min_body_price = price * 0.002
-    min_body1 = max(atr * 0.35, min_body_price)
-    min_body3 = max(atr * 0.35, min_body_price)
     if atr == 0:
         return None
-    if body1 < min_body1:
-        return None
-    if body3 < min_body3:
-        return None
-
-    # --- C2 (звезда): маленькое тело ИЛИ hammer (длинная нижняя тень) ---
-    is_hammer = lower_wick2 > body2 * 1.5 and lower_wick2 > atr * 0.2
-    if is_hammer:
-        if body2 > atr * 0.4:
-            return None
-    else:
-        if body2 > atr * 0.25:
-            return None
-
-    # --- C3: смягчаем требование к телу при длинной нижней тени ---
-    strong_lower_wick3 = lower_wick3 > body3 * 1.2 and lower_wick3 > atr * 0.2
-    if strong_lower_wick3:
-        if body3 < hl3 * 0.25:
-            return None
-    else:
-        if body3 < hl3 * 0.4:
-            return None
-
-    # --- позиционирование C2: звезда в нижней половине C1 ---
-    if max(o2, cl2) > cl1 + atr * 0.15:
+    min_body = max(atr * 0.5, price * 0.001)
+    if body1 < min_body or body3 < min_body:
         return None
 
-    c1_mid = l1 + hl1 * 0.5
-    if max(o2, cl2) > c1_mid and not is_hammer:
+    # C2: звезда, тело крошечное
+    if body2 > body1 * 0.2:
+        return None
+    if body2 > atr * 0.15:
         return None
 
-    # --- C2 не должна открыться далеко над хаем C1 ---
-    if o2 > h1 - atr * 0.1:
+    # C2 позиция: НИЖЕ close C1
+    if max(o2, cl2) > cl1:
         return None
 
-    # --- пенетрация C3 в тело C1 ---
+    c1_mid = (h1 + l1) / 2
+    if max(o2, cl2) > c1_mid:
+        return None
+
+    is_hammer = lower_wick2 > body2 * 2.0 and lower_wick2 > atr * 0.3
+
+    # C3: подтверждение
     penetration = (cl3 - cl1) / body1
-    if penetration < 0.45:
+    if penetration < 0.6:
+        return None
+    if body3 < body1 * 0.5:
         return None
 
-    # --- тело C3 пропорционально C1 ---
-    if body3 < body1 * 0.35:
+    # Тренд
+    if not _is_downtrend(trend_ctx):
         return None
 
-    # --- контекст тренда ---
-    ctx1_close, ctx2_close = ctx1[4], ctx2[4]
-    downtrend = (ctx1_close < ctx2_close < cl1) or (ctx2[4] < ctx2[1] and ctx1[4] < ctx1[1])
-    if not downtrend:
-        if cl1 < ema:
-            logger.debug(f"MS rejected by EMA gate: {symbol} {timeframe} cl1={cl1:.4f} ema={ema:.4f}")
-            return None
+    # Локальный минимум
+    recent_low = min(c[3] for c in trend_ctx[-5:]) if len(trend_ctx) >= 5 else l1
+    at_low = cl1 <= recent_low * 1.02
 
-    # --- confidence scoring ---
+    # Scoring
     score = 0.5
     reasons = []
 
-    if penetration >= 0.75:
+    if penetration >= 0.8:
         score += 0.15
-        reasons.append("penetration>75%")
+        reasons.append("strong_pen")
     elif penetration >= 0.6:
         score += 0.05
 
-    if cl1 < 30:
+    if cl3 > o1:
+        score += 0.1
+        reasons.append("close_above_C1_open")
+
+    if rsi < 35:
         score += 0.15
-        reasons.append(f"RSI={rsi:.1f}<30")
-    elif rsi < 40:
+        reasons.append(f"RSI={rsi:.0f}<35")
+    elif rsi < 45:
         score += 0.05
 
     if cl1 < ema:
         score += 0.1
-        reasons.append("price<EMA20")
+        reasons.append("below_EMA")
 
     if is_hammer:
         score += 0.15
-        reasons.append("hammer_C2")
+        reasons.append("hammer")
 
-    if strong_lower_wick3:
+    if at_low:
         score += 0.1
-        reasons.append("lower_wick_C3")
+        reasons.append("at_local_low")
 
     if has_volume:
         v1, v2, v3 = c1[5], c2[5], c3[5]
-        if v3 > v2 * 1.3 and v1 > avg_vol * 1.1:
+        if v3 > v2 * 1.5 and v1 > avg_vol:
             score += 0.15
-            reasons.append("volume_confirm")
+            reasons.append("volume")
         elif v3 > v2:
             score += 0.05
 
-    if score >= 0.85:
-        confidence = "high"
-    elif score >= 0.65:
-        confidence = "medium"
-    else:
-        confidence = "low"
+    confidence = "high" if score >= 0.85 else ("medium" if score >= 0.65 else "low")
 
     description = _make_description(
         "\u2600\ufe0f \u0423\u0442\u0440\u0435\u043d\u043d\u044f\u044f \u0437\u0432\u0435\u0437\u0434\u0430",
@@ -291,11 +291,11 @@ def _check_morning_star(
 
 
 # ============================================================================
-# Evening Star — версия с ATR, shooting star, scoring
+# Evening Star
 # ============================================================================
 
 def _check_evening_star(
-    ctx1, ctx2, c1, c2, c3,
+    trend_ctx, c1, c2, c3,
     symbol: str, timeframe: str,
     atr: float, rsi: float, ema: float,
     avg_vol: float, has_volume: bool, price: float
@@ -308,9 +308,8 @@ def _check_evening_star(
     body2 = abs(cl2 - o2)
     body3 = abs(cl3 - o3)
     hl1 = h1 - l1
-    hl3 = h3 - l3
 
-    if body1 == 0 or body3 == 0 or hl1 == 0 or hl3 == 0:
+    if body1 == 0 or body3 == 0 or hl1 == 0:
         return None
     if cl1 <= o1:
         return None
@@ -318,108 +317,85 @@ def _check_evening_star(
         return None
 
     upper_wick2 = h2 - max(o2, cl2)
-    lower_wick2 = min(o2, cl2) - l2
-    upper_wick3 = h3 - max(o3, cl3)
-    lower_wick3 = min(o3, cl3) - l3
 
-    # --- минимальное тело относительно цены ---
-    min_body_price = price * 0.002
-    min_body1 = max(atr * 0.35, min_body_price)
-    min_body3 = max(atr * 0.35, min_body_price)
     if atr == 0:
         return None
-    if body1 < min_body1:
-        return None
-    if body3 < min_body3:
-        return None
-
-    # --- C2: звезда или shooting star ---
-    is_shooting_star = upper_wick2 > body2 * 1.5 and upper_wick2 > atr * 0.2
-    if is_shooting_star:
-        if body2 > atr * 0.4:
-            return None
-    else:
-        if body2 > atr * 0.25:
-            return None
-
-    # --- C3: смягчаем при длинной верхней тени ---
-    strong_upper_wick3 = upper_wick3 > body3 * 1.2 and upper_wick3 > atr * 0.2
-    if strong_upper_wick3:
-        if body3 < hl3 * 0.25:
-            return None
-    else:
-        if body3 < hl3 * 0.4:
-            return None
-
-    # --- позиционирование C2: звезда в верхней половине C1 ---
-    if min(o2, cl2) < cl1 - atr * 0.15:
+    min_body = max(atr * 0.5, price * 0.001)
+    if body1 < min_body or body3 < min_body:
         return None
 
-    c1_mid = l1 + hl1 * 0.5
-    if min(o2, cl2) < c1_mid and not is_shooting_star:
+    # C2: тело крошечное
+    if body2 > body1 * 0.2:
+        return None
+    if body2 > atr * 0.15:
         return None
 
-    if o2 < l1 + atr * 0.1:
+    # C2 позиция: ВЫШЕ close C1
+    if max(o2, cl2) < cl1:
         return None
 
-    # --- пенетрация C3 в тело C1 ---
+    c1_mid = (h1 + l1) / 2
+    if min(o2, cl2) < c1_mid:
+        return None
+
+    is_shooting_star = upper_wick2 > body2 * 2.0 and upper_wick2 > atr * 0.3
+
+    # C3: подтверждение
     penetration = (cl1 - cl3) / body1
-    if penetration < 0.45:
+    if penetration < 0.6:
+        return None
+    if body3 < body1 * 0.5:
         return None
 
-    if body3 < body1 * 0.35:
+    # Тренд
+    if not _is_uptrend(trend_ctx):
         return None
 
-    # --- контекст тренда ---
-    ctx1_close, ctx2_close = ctx1[4], ctx2[4]
-    uptrend = (ctx1_close > ctx2_close > cl1) or (ctx2[4] > ctx2[1] and ctx1[4] > ctx1[1])
-    if not uptrend:
-        if cl1 < ema:
-            logger.debug(f"ES rejected by EMA gate: {symbol} {timeframe} cl1={cl1:.4f} ema={ema:.4f}")
-            return None
+    # Локальный максимум
+    recent_high = max(c[2] for c in trend_ctx[-5:]) if len(trend_ctx) >= 5 else h1
+    at_high = cl1 >= recent_high * 0.98
 
-    # --- confidence scoring ---
+    # Scoring
     score = 0.5
     reasons = []
 
-    if penetration >= 0.75:
+    if penetration >= 0.8:
         score += 0.15
-        reasons.append("penetration>75%")
+        reasons.append("strong_pen")
     elif penetration >= 0.6:
         score += 0.05
 
-    if rsi > 70:
+    if cl3 < o1:
+        score += 0.1
+        reasons.append("close_below_C1_open")
+
+    if rsi > 65:
         score += 0.15
-        reasons.append(f"RSI={rsi:.1f}>70")
-    elif rsi > 60:
+        reasons.append(f"RSI={rsi:.0f}>65")
+    elif rsi > 55:
         score += 0.05
 
     if cl1 > ema:
         score += 0.1
-        reasons.append("price>EMA20")
+        reasons.append("above_EMA")
 
     if is_shooting_star:
         score += 0.15
-        reasons.append("shooting_star_C2")
+        reasons.append("shooting_star")
 
-    if strong_upper_wick3:
+    if at_high:
         score += 0.1
-        reasons.append("upper_wick_C3")
+        reasons.append("at_local_high")
 
     if has_volume:
         v1, v2, v3 = c1[5], c2[5], c3[5]
-        if v3 > v2 * 1.3 and v1 > avg_vol * 1.1:
+        if v3 > v2 * 1.5 and v1 > avg_vol:
             score += 0.15
-            reasons.append("volume_confirm")
+            reasons.append("volume")
         elif v3 > v2:
             score += 0.05
 
-    if score >= 0.85:
-        confidence = "high"
-    elif score >= 0.65:
-        confidence = "medium"
-    else:
-        confidence = "low"
+    confidence = "high" if score >= 0.85 else ("medium" if score >= 0.65 else "low")
 
     description = _make_description(
         "\U0001f319 \u0412\u0435\u0447\u0435\u0440\u043d\u044f\u044f \u0437\u0432\u0435\u0437\u0434\u0430",
@@ -450,13 +426,13 @@ def _make_description(
     body2 = abs(cl2 - o2)
     body3 = abs(cl3 - o3)
     ratio = round(body3 / body1, 2) if body1 else 0
-    reasons_str = ", ".join(reasons) if reasons else "base pattern"
+    reasons_str = ", ".join(reasons) if reasons else "base"
 
     return (
-        f"{name} {conf_emoji} {confidence.upper()} (score: {score:.2f})\n"
+        f"{name} {conf_emoji} {confidence.upper()} (score:{score:.2f})\n"
         f"\u0424\u0430\u043a\u0442\u043e\u0440\u044b: {reasons_str}\n"
-        f"\u0421\u0432\u0435\u0447\u0430 1: O={o1:.4f} C={cl1:.4f} \u0442\u0435\u043b\u043e={body1:.4f}\n"
-        f"\u0421\u0432\u0435\u0447\u0430 2: O={o2:.4f} C={cl2:.4f} \u0442\u0435\u043b\u043e={body2:.4f}\n"
-        f"\u0421\u0432\u0435\u0447\u0430 3: O={o3:.4f} C={cl3:.4f} \u0442\u0435\u043b\u043e={body3:.4f}\n"
-        f"\u0421\u043e\u043e\u0442\u043d\u043e\u0448\u0435\u043d\u0438\u0435 3/1: {ratio} | ATR: {atr:.4f} | RSI: {rsi:.1f}"
+        f"C1: O={o1:.4f} C={cl1:.4f} body={body1:.4f}\n"
+        f"C2: O={o2:.4f} C={cl2:.4f} body={body2:.4f}\n"
+        f"C3: O={o3:.4f} C={cl3:.4f} body={body3:.4f}\n"
+        f"Penetration: {ratio} | ATR:{atr:.4f} | RSI:{rsi:.1f}"
     )

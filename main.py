@@ -69,56 +69,78 @@ class StarBot:
         while self.running:
             try:
                 now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-                candle_ts = now_ms - (now_ms % tf_ms)
+                base_ts = now_ms - (now_ms % tf_ms)
+                latest_scanned = self.last_check.get(tf, 0)
 
-                if tf in self.last_check and self.last_check[tf] >= candle_ts:
-                    await asyncio.sleep(self.config.check_interval_sec)
-                    continue
+                for offset in (2, 1, 0):
+                    candle_ts = base_ts - offset * tf_ms
 
-                self.last_check[tf] = candle_ts
-                logger.info(f"[{tf}] New candle closed ({datetime.fromtimestamp(candle_ts/1000, tz=timezone.utc)}), "
-                            f"scanning {len(self.liquid_pairs)} pairs...")
-
-                if len(self.liquid_pairs) == 0:
-                    continue
-
-                found = 0
-                for i, symbol in enumerate(self.liquid_pairs):
-                    if not self.running:
-                        break
-                    if i > 0 and i % 10 == 0:
-                        await asyncio.sleep(0.5)
-
-                    try:
-                        results = await self._check_symbol(symbol, tf, candle_ts, tf_ms)
-                        for r in results:
-                            alert_key = (symbol, tf, candle_ts)
-                            if alert_key in self.alerted:
-                                continue
-                            self.alerted.add(alert_key)
-                            logger.info(f">>> PATTERN: {r.pattern.value} {symbol} {tf} "
-                                        f"({r.confidence}, score={r.score:.2f})")
-
-                            chart_candles = await self._fetch_chart_candles(symbol, tf)
-                            img = None
-                            if chart_candles:
-                                img = await asyncio.to_thread(
-                                    generate_chart, chart_candles, symbol, tf, r.pattern
-                                )
-
-                            if img:
-                                await self.alerter.send_alert(r, img.getvalue())
-                            found += 1
-                            await asyncio.sleep(0.3)
-                    except Exception as e:
-                        logger.debug(f"Error checking {symbol} {tf}: {e}")
+                    if candle_ts <= latest_scanned:
                         continue
 
-                logger.info(f"[{tf}] Scan done, patterns found: {found}")
+                    if len(self.liquid_pairs) == 0:
+                        break
+
+                    # проверяем на первой паре — есть ли свеча в API
+                    if not await self._candle_available(self.liquid_pairs[0], tf, candle_ts):
+                        # свеча ещё не готова, не обновляем last_check — пересканим позже
+                        continue
+
+                    logger.info(f"[{tf}] Scanning candle "
+                                f"{datetime.fromtimestamp(candle_ts/1000, tz=timezone.utc)} "
+                                f"(offset={offset}), {len(self.liquid_pairs)} pairs...")
+
+                    found = 0
+                    for i, symbol in enumerate(self.liquid_pairs):
+                        if not self.running:
+                            break
+                        if i > 0 and i % 10 == 0:
+                            await asyncio.sleep(0.5)
+
+                        try:
+                            results = await self._check_symbol(symbol, tf, candle_ts, tf_ms)
+                            for r in results:
+                                if r.c3_timestamp != candle_ts:
+                                    continue
+                                alert_key = (symbol, tf, candle_ts)
+                                if alert_key in self.alerted:
+                                    continue
+                                self.alerted.add(alert_key)
+                                logger.info(f">>> PATTERN: {r.pattern.value} {symbol} {tf} "
+                                            f"({r.confidence}, score={r.score:.2f})")
+
+                                chart_candles = await self._fetch_chart_candles(symbol, tf)
+                                img = None
+                                if chart_candles:
+                                    img = await asyncio.to_thread(
+                                        generate_chart, chart_candles, symbol, tf, r.pattern
+                                    )
+                                if img:
+                                    await self.alerter.send_alert(r, img.getvalue())
+                                found += 1
+                                await asyncio.sleep(0.3)
+                        except Exception as e:
+                            logger.debug(f"Error checking {symbol} {tf}: {e}")
+                            continue
+
+                    latest_scanned = candle_ts
+                    logger.info(f"[{tf}] Candle offset={offset} done, patterns found: {found}")
+
+                if latest_scanned > self.last_check.get(tf, 0):
+                    self.last_check[tf] = latest_scanned
+
+                await asyncio.sleep(self.config.check_interval_sec)
 
             except Exception as e:
                 logger.error(f"[{tf}] Worker error: {e}")
                 await asyncio.sleep(5)
+
+    async def _candle_available(self, symbol: str, tf: str, candle_ts: int) -> bool:
+        try:
+            candles = await self.exchange.fetch_ohlcv(symbol, tf, limit=3)
+            return any(c[0] == candle_ts for c in candles)
+        except Exception:
+            return False
 
     async def _check_symbol(self, symbol: str, tf: str, candle_ts: int, tf_ms: int) -> list:
         candles = None
