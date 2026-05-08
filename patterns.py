@@ -91,19 +91,19 @@ def _history_valid(candles: List[List], tf_ms: int) -> bool:
 # ============================================================================
 
 def _is_uptrend(ctx: List[List]) -> bool:
-    if len(ctx) < 3:
+    if len(ctx) < 4:
         return True
     closes = [c[4] for c in ctx]
     bullish_count = sum(1 for c in ctx if c[4] > c[1])
-    return bullish_count >= 3 and closes[-1] > closes[0]
+    return bullish_count >= 4 and closes[-1] > closes[0]
 
 
 def _is_downtrend(ctx: List[List]) -> bool:
-    if len(ctx) < 3:
+    if len(ctx) < 4:
         return True
     closes = [c[4] for c in ctx]
     bearish_count = sum(1 for c in ctx if c[4] < c[1])
-    return bearish_count >= 3 and closes[-1] < closes[0]
+    return bearish_count >= 4 and closes[-1] < closes[0]
 
 
 # ============================================================================
@@ -195,6 +195,7 @@ def _check_morning_star(
         return None
 
     lower_wick2 = min(o2, cl2) - l2
+    upper_wick2 = h2 - max(o2, cl2)
 
     if atr == 0:
         return None
@@ -202,13 +203,13 @@ def _check_morning_star(
     if body1 < min_body or body3 < min_body:
         return None
 
-    # C2: звезда, тело крошечное
-    if body2 > body1 * 0.2:
+    # C2: тело крошечное, строго
+    if body2 > body1 * 0.15:
         return None
-    if body2 > atr * 0.15:
+    if body2 > atr * 0.1:
         return None
 
-    # C2 позиция: НИЖЕ close C1
+    # C2 позиция: строго внизу C1
     if max(o2, cl2) > cl1:
         return None
 
@@ -216,7 +217,10 @@ def _check_morning_star(
     if max(o2, cl2) > c1_mid:
         return None
 
-    is_hammer = lower_wick2 > body2 * 2.0 and lower_wick2 > atr * 0.3
+    # C2: должна быть "звездой" — длинная тень
+    is_star = (lower_wick2 > body2 * 1.5) or (upper_wick2 > body2 * 1.5)
+    if not is_star:
+        return None
 
     # C3: подтверждение
     penetration = (cl3 - cl1) / body1
@@ -245,7 +249,7 @@ def _check_morning_star(
 
     if cl3 > o1:
         score += 0.1
-        reasons.append("close_above_C1_open")
+        reasons.append("engulfing")
 
     if rsi < 35:
         score += 0.15
@@ -257,9 +261,9 @@ def _check_morning_star(
         score += 0.1
         reasons.append("below_EMA")
 
-    if is_hammer:
-        score += 0.15
-        reasons.append("hammer")
+    if is_star:
+        score += 0.1
+        reasons.append("star_wick")
 
     if at_low:
         score += 0.1
@@ -325,12 +329,12 @@ def _check_evening_star(
         return None
 
     # C2: тело крошечное
-    if body2 > body1 * 0.2:
+    if body2 > body1 * 0.15:
         return None
-    if body2 > atr * 0.15:
+    if body2 > atr * 0.1:
         return None
 
-    # C2 позиция: ВЫШЕ close C1
+    # C2 позиция: строго наверху C1
     if max(o2, cl2) < cl1:
         return None
 
@@ -338,7 +342,10 @@ def _check_evening_star(
     if min(o2, cl2) < c1_mid:
         return None
 
-    is_shooting_star = upper_wick2 > body2 * 2.0 and upper_wick2 > atr * 0.3
+    # C2: shooting star или doji
+    is_star = (upper_wick2 > body2 * 1.5) or (lower_wick2 > body2 * 1.5)
+    if not is_star:
+        return None
 
     # C3: подтверждение
     penetration = (cl1 - cl3) / body1
@@ -367,7 +374,7 @@ def _check_evening_star(
 
     if cl3 < o1:
         score += 0.1
-        reasons.append("close_below_C1_open")
+        reasons.append("engulfing")
 
     if rsi > 65:
         score += 0.15
@@ -379,9 +386,9 @@ def _check_evening_star(
         score += 0.1
         reasons.append("above_EMA")
 
-    if is_shooting_star:
-        score += 0.15
-        reasons.append("shooting_star")
+    if is_star:
+        score += 0.1
+        reasons.append("star_wick")
 
     if at_high:
         score += 0.1

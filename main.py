@@ -112,8 +112,14 @@ class StarBot:
                                 chart_candles = await self._fetch_chart_candles(symbol, tf)
                                 img = None
                                 if chart_candles:
+                                    c3_ts = r.c3_timestamp
+                                    pattern_idx = None
+                                    for idx, c in enumerate(chart_candles):
+                                        if c[0] == c3_ts:
+                                            pattern_idx = idx
+                                            break
                                     img = await asyncio.to_thread(
-                                        generate_chart, chart_candles, symbol, tf, r.pattern
+                                        generate_chart, chart_candles, symbol, tf, r.pattern, pattern_idx
                                     )
                                 if img:
                                     await self.alerter.send_alert(r, img.getvalue())
