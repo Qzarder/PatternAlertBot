@@ -57,8 +57,8 @@ class BinanceFutures:
                 gaps.append((raw[i - 1][0], raw[i][0], raw[i][0] - expected))
 
         if gaps:
-            logger.debug(f"[{symbol} {tf}] {len(gaps)} gap(s) in candle history")
-        return raw
+            logger.warning(f"[{symbol} {tf}] {len(gaps)} gap(s) in candle history, skipping")
+            return []
 
     async def fetch_tickers(self) -> dict:
         return await asyncio.wait_for(

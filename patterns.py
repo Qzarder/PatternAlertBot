@@ -217,8 +217,9 @@ def _check_morning_star(
     if max(o2, cl2) > c1_mid:
         return None
 
-    # C2: должна быть "звездой" — длинная тень
-    is_star = (lower_wick2 > body2 * 1.5) or (upper_wick2 > body2 * 1.5)
+    # C2: должна быть "звездой" — длинная нижняя тень (hammer)
+    # верхняя тень для MS нежелательна — продавцы давят сверху
+    is_star = lower_wick2 > body2 * 1.5
     if not is_star:
         return None
 
@@ -321,6 +322,7 @@ def _check_evening_star(
         return None
 
     upper_wick2 = h2 - max(o2, cl2)
+    lower_wick2 = min(o2, cl2) - l2
 
     if atr == 0:
         return None

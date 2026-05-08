@@ -143,7 +143,7 @@ class StarBot:
 
     async def _candle_available(self, symbol: str, tf: str, candle_ts: int) -> bool:
         try:
-            candles = await self.exchange.fetch_ohlcv(symbol, tf, limit=3)
+            candles = await self.exchange.fetch_ohlcv(symbol, tf, limit=5)
             return any(c[0] == candle_ts for c in candles)
         except Exception:
             return False
