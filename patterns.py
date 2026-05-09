@@ -91,19 +91,19 @@ def _history_valid(candles: List[List], tf_ms: int) -> bool:
 # ============================================================================
 
 def _is_uptrend(ctx: List[List]) -> bool:
-    if len(ctx) < 4:
-        return True
+    if len(ctx) < 5:
+        return False
     closes = [c[4] for c in ctx]
-    bullish_count = sum(1 for c in ctx if c[4] > c[1])
-    return bullish_count >= 4 and closes[-1] > closes[0]
+    bullish = sum(1 for c in ctx if c[4] > c[1])
+    return bullish >= 4 and closes[-1] > closes[0] * 1.005
 
 
 def _is_downtrend(ctx: List[List]) -> bool:
-    if len(ctx) < 4:
-        return True
+    if len(ctx) < 5:
+        return False
     closes = [c[4] for c in ctx]
-    bearish_count = sum(1 for c in ctx if c[4] < c[1])
-    return bearish_count >= 4 and closes[-1] < closes[0]
+    bearish = sum(1 for c in ctx if c[4] < c[1])
+    return bearish >= 4 and closes[-1] < closes[0] * 0.995
 
 
 # ============================================================================
@@ -230,6 +230,10 @@ def _check_morning_star(
     if body3 < body1 * 0.5:
         return None
 
+    # EMA: жёстко — цена должна быть ниже EMA20 (перепроданность)
+    if cl1 >= ema:
+        return None
+
     # Тренд
     if not _is_downtrend(trend_ctx):
         return None
@@ -257,10 +261,6 @@ def _check_morning_star(
         reasons.append(f"RSI={rsi:.0f}<35")
     elif rsi < 45:
         score += 0.05
-
-    if cl1 < ema:
-        score += 0.1
-        reasons.append("below_EMA")
 
     if is_star:
         score += 0.1
@@ -356,6 +356,10 @@ def _check_evening_star(
     if body3 < body1 * 0.5:
         return None
 
+    # EMA: жёстко — цена должна быть выше EMA20 (перекупленность)
+    if cl1 <= ema:
+        return None
+
     # Тренд
     if not _is_uptrend(trend_ctx):
         return None
@@ -383,10 +387,6 @@ def _check_evening_star(
         reasons.append(f"RSI={rsi:.0f}>65")
     elif rsi > 55:
         score += 0.05
-
-    if cl1 > ema:
-        score += 0.1
-        reasons.append("above_EMA")
 
     if is_star:
         score += 0.1
