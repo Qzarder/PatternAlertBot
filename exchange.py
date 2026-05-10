@@ -48,7 +48,7 @@ class BinanceFutures:
         raw = await self.fetch_ohlcv(symbol, tf, limit=limit)
 
         if raw is None:
-            logger.debug(f"[{symbol} {tf}] fetch_ohlcv returned None")
+            logger.warning(f"[{symbol} {tf}] fetch_ohlcv returned None")
             return []
 
         tf_ms = TIMEFRAME_MS.get(tf, 0)
@@ -114,3 +114,6 @@ class BinanceFutures:
         except Exception:
             pass
         return None
+
+    async def close(self):
+        await asyncio.to_thread(self.exchange.close)

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import signal
 import sys
 from datetime import datetime, timezone
 
@@ -9,15 +10,34 @@ from patterns import detect_patterns
 from chart import generate_chart
 from alerts import TelegramAlerter
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.FileHandler("bot.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+
+def _setup_logging():
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    fh = logging.FileHandler("bot.log", encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(formatter)
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(formatter)
+
+    bot_logger = logging.getLogger("star_bot")
+    bot_logger.setLevel(logging.DEBUG)
+    bot_logger.handlers.clear()
+    bot_logger.addHandler(fh)
+    bot_logger.addHandler(ch)
+
+    for lib in ("ccxt", "aiohttp", "matplotlib", "PIL", "asyncio", "urllib3"):
+        logging.getLogger(lib).setLevel(logging.WARNING)
+
+    root = logging.getLogger()
+    root.setLevel(logging.WARNING)
+    root.handlers.clear()
+
+
+_setup_logging()
 logger = logging.getLogger("star_bot")
 
 CHART_CONTEXT_CANDLES = 40
@@ -169,11 +189,11 @@ class StarBot:
                 await asyncio.sleep(3)
 
         if c3_idx is None:
-            logger.debug(f"[{symbol} {tf}] candle_ts not in API after {4} attempts, skipping")
+            # logger.debug(f"[{symbol} {tf}] candle_ts not in API after 4 attempts, skipping")
             return []
 
         if c3_idx < 19:
-            logger.debug(f"[{symbol} {tf}] too few candles before C3 (c3_idx={c3_idx}, need>=19), skipping")
+            # logger.debug(f"[{symbol} {tf}] too few candles ({c3_idx=}), skipping")
             return []
 
         window = candles[:c3_idx + 1]
@@ -196,6 +216,7 @@ class StarBot:
 
     async def stop(self):
         self.running = False
+        await self.exchange.close()
         await self.alerter.close()
         logger.info("Bot stopped")
 
@@ -206,6 +227,13 @@ async def main():
     print(">>> Creating bot...", flush=True)
     bot = StarBot(config)
     print(">>> Bot created, starting...", flush=True)
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(bot.stop()))
+        except NotImplementedError:
+            pass
 
     try:
         await bot.start()
