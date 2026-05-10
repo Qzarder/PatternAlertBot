@@ -46,6 +46,11 @@ class BinanceFutures:
 
     async def fetch_and_validate(self, symbol: str, tf: str, limit: int = 100) -> list:
         raw = await self.fetch_ohlcv(symbol, tf, limit=limit)
+
+        if raw is None:
+            logger.debug(f"[{symbol} {tf}] fetch_ohlcv returned None")
+            return []
+
         tf_ms = TIMEFRAME_MS.get(tf, 0)
         if tf_ms == 0 or len(raw) < 2:
             return raw

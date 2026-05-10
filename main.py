@@ -157,6 +157,8 @@ class StarBot:
 
         for attempt in range(4):
             candles = await self.exchange.fetch_and_validate(symbol, tf, limit=PATTERN_CHECK_LIMIT)
+            if candles is None or len(candles) < 20:
+                return []
             for i in range(len(candles) - 1, -1, -1):
                 if candles[i][0] == candle_ts:
                     c3_idx = i
