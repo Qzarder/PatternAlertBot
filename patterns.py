@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
+import logging
+
+logger = logging.getLogger("patterns")
 
 
 class PatternType(Enum):
@@ -232,10 +235,12 @@ def _check_morning_star(
 
     # EMA: жёстко — цена должна быть ниже EMA20 (перепроданность)
     if cl1 >= ema:
+        logger.debug(f"[MS {symbol}] REJECT EMA: cl1={cl1:.4f} ema={ema:.4f}")
         return None
 
     # Тренд
     if not _is_downtrend(trend_ctx):
+        logger.debug(f"[MS {symbol}] REJECT trend: ctx_len={len(trend_ctx)}")
         return None
 
     # Локальный минимум
@@ -358,10 +363,12 @@ def _check_evening_star(
 
     # EMA: жёстко — цена должна быть выше EMA20 (перекупленность)
     if cl1 <= ema:
+        logger.debug(f"[ES {symbol}] REJECT EMA: cl1={cl1:.4f} ema={ema:.4f}")
         return None
 
     # Тренд
     if not _is_uptrend(trend_ctx):
+        logger.debug(f"[ES {symbol}] REJECT trend: ctx_len={len(trend_ctx)}")
         return None
 
     # Локальный максимум
