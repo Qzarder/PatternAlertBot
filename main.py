@@ -95,7 +95,7 @@ class StarBot:
                 base_ts = now_ms - (now_ms % tf_ms)
                 latest_scanned = self.last_check.get(tf, 0)
 
-                for offset in (2, 1, 0):
+                for offset in (2, 1):
                     candle_ts = base_ts - offset * tf_ms
 
                     if candle_ts <= latest_scanned:
@@ -216,7 +216,6 @@ class StarBot:
 
     async def stop(self):
         self.running = False
-        await self.exchange.close()
         await self.alerter.close()
         logger.info("Bot stopped")
 
@@ -237,6 +236,8 @@ async def main():
 
     try:
         await bot.start()
+    except asyncio.CancelledError:
+        logger.info("Shutdown requested")
     except Exception as e:
         logger.error(f"Critical error: {e}", exc_info=True)
     finally:

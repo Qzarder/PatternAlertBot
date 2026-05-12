@@ -114,6 +114,3 @@ class BinanceFutures:
         except Exception:
             pass
         return None
-
-    async def close(self):
-        await asyncio.to_thread(self.exchange.close)
