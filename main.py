@@ -41,7 +41,7 @@ _setup_logging()
 logger = logging.getLogger("star_bot")
 
 CHART_CONTEXT_CANDLES = 40
-PATTERN_CHECK_LIMIT = 50
+PATTERN_CHECK_LIMIT = 65
 
 
 class StarBot:
@@ -192,7 +192,7 @@ class StarBot:
             # logger.debug(f"[{symbol} {tf}] candle_ts not in API after 4 attempts, skipping")
             return []
 
-        if c3_idx < 19:
+        if c3_idx < 54:
             # logger.debug(f"[{symbol} {tf}] too few candles ({c3_idx=}), skipping")
             return []
 

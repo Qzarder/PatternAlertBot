@@ -120,12 +120,13 @@ def detect_patterns(
     tf_ms: int = 0,
     min_atr: float = 0.0,
 ) -> List[PatternResult]:
-    if len(candles) < 25:
+    if len(candles) < 55:
         return []
 
     cl = _closes(candles)
     atr_val = _atr(candles, 14)
     ema_val = _ema(cl, 20)
+    ema50_val = _ema(cl, 50)
     avg_vol = _avg_volume(candles, 20)
 
     if min_atr > 0 and atr_val < min_atr:
@@ -153,7 +154,7 @@ def detect_patterns(
     results = []
     ms = _check_morning_star(
         trend_ctx, c1, c2, c3,
-        symbol, timeframe, atr_val, rsi_star, ema_val,
+        symbol, timeframe, atr_val, rsi_star, ema_val, ema50_val,
         avg_vol if has_volume else 0.0, has_volume, price
     )
     if ms:
@@ -162,7 +163,7 @@ def detect_patterns(
 
     es = _check_evening_star(
         trend_ctx, c1, c2, c3,
-        symbol, timeframe, atr_val, rsi_star, ema_val,
+        symbol, timeframe, atr_val, rsi_star, ema_val, ema50_val,
         avg_vol if has_volume else 0.0, has_volume, price
     )
     if es:
@@ -179,7 +180,7 @@ def detect_patterns(
 def _check_morning_star(
     trend_ctx, c1, c2, c3,
     symbol: str, timeframe: str,
-    atr: float, rsi_star: float, ema: float,
+    atr: float, rsi_star: float, ema: float, ema50: float,
     avg_vol: float, has_volume: bool, price: float
 ) -> Optional[PatternResult]:
     o1, h1, l1, cl1 = c1[1], c1[2], c1[3], c1[4]
@@ -234,8 +235,12 @@ def _check_morning_star(
     if body3 < body1 * 0.5:
         return None
 
-    # EMA: цена ниже EMA20
+    # EMA20: цена ниже EMA20 (перепроданность)
     if cl1 >= ema:
+        return None
+
+    # EMA50: цена ниже EMA50 (структурный даунтренд)
+    if cl1 >= ema50:
         return None
 
     # Тренд
@@ -303,7 +308,7 @@ def _check_morning_star(
 def _check_evening_star(
     trend_ctx, c1, c2, c3,
     symbol: str, timeframe: str,
-    atr: float, rsi_star: float, ema: float,
+    atr: float, rsi_star: float, ema: float, ema50: float,
     avg_vol: float, has_volume: bool, price: float
 ) -> Optional[PatternResult]:
     o1, h1, l1, cl1 = c1[1], c1[2], c1[3], c1[4]
@@ -358,8 +363,12 @@ def _check_evening_star(
     if body3 < body1 * 0.5:
         return None
 
-    # EMA: цена выше EMA20
+    # EMA20: цена выше EMA20 (перекупленность)
     if cl1 <= ema:
+        return None
+
+    # EMA50: цена выше EMA50 (структурный аптренд)
+    if cl1 <= ema50:
         return None
 
     # Тренд
