@@ -145,12 +145,12 @@ def detect_patterns(
 
     # Паттерн: candles[-3]=C1, candles[-2]=C2, candles[-1]=C3
     # Тренд: candles[-11:-3] = 8 свечей перед C1
-    # Свинг: candles[-18:-3] = 15 свечей перед C1
+    # Свинг: candles[:-3] = все свечи перед C1
     c1 = candles[-3]
     c2 = candles[-2]
     c3 = candles[-1]
     trend_ctx = candles[-11:-3] if len(candles) >= 11 else candles[:-3]
-    swing_ctx = candles[-18:-3] if len(candles) >= 18 else candles[:-3]
+    swing_ctx = candles[:-3]
 
     if tf_ms > 0:
         if (c2[0] - c1[0] != tf_ms) or (c3[0] - c2[0] != tf_ms):
@@ -258,10 +258,14 @@ def _check_morning_star(
     if not _is_downtrend(trend_ctx):
         return None
 
-    # Локальный минимум: pattern low должен быть минимумом контекста
+    # Локальный минимум: pattern low должен пробить все предыдущие минимумы
     pattern_low = min(l1, l2, l3)
-    recent_low = min(c[3] for c in swing_ctx) if len(swing_ctx) else l1
-    if pattern_low > recent_low:
+    all_time_low = min(c[3] for c in swing_ctx)
+    if pattern_low >= all_time_low:
+        return None
+
+    # Volume floor: reject low-volatility chop zones
+    if has_volume and avg_vol > 0 and c1[5] < avg_vol * 0.5:
         return None
 
     # Scoring
@@ -387,10 +391,14 @@ def _check_evening_star(
     if not _is_uptrend(trend_ctx):
         return None
 
-    # Локальный максимум: pattern high должен быть максимумом контекста
+    # Локальный максимум: pattern high должен пробить все предыдущие максимумы
     pattern_high = max(h1, h2, h3)
-    recent_high = max(c[2] for c in swing_ctx) if len(swing_ctx) else h1
-    if pattern_high < recent_high:
+    all_time_high = max(c[2] for c in swing_ctx)
+    if pattern_high <= all_time_high:
+        return None
+
+    # Volume floor: reject low-volatility chop zones
+    if has_volume and avg_vol > 0 and c1[5] < avg_vol * 0.5:
         return None
 
     # Scoring
