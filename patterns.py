@@ -94,19 +94,27 @@ def _history_valid(candles: List[List], tf_ms: int) -> bool:
 # ============================================================================
 
 def _is_uptrend(ctx: List[List]) -> bool:
-    if len(ctx) < 5:
+    if len(ctx) < 8:
         return False
+    highs = [c[2] for c in ctx]
+    lows = [c[3] for c in ctx]
     closes = [c[4] for c in ctx]
-    bullish = sum(1 for c in ctx if c[4] > c[1])
-    return bullish >= 4 and closes[-1] > closes[0] * 1.005
+    hh = highs[-1] > highs[-3] > highs[-5]
+    hl = lows[-1] > lows[-3] > lows[-5]
+    momentum = closes[-1] > closes[0] * 1.02
+    return hh and hl and momentum
 
 
 def _is_downtrend(ctx: List[List]) -> bool:
-    if len(ctx) < 5:
+    if len(ctx) < 8:
         return False
+    highs = [c[2] for c in ctx]
+    lows = [c[3] for c in ctx]
     closes = [c[4] for c in ctx]
-    bearish = sum(1 for c in ctx if c[4] < c[1])
-    return bearish >= 4 and closes[-1] < closes[0] * 0.995
+    lh = highs[-1] < highs[-3] < highs[-5]
+    ll = lows[-1] < lows[-3] < lows[-5]
+    momentum = closes[-1] < closes[0] * 0.98
+    return lh and ll and momentum
 
 
 # ============================================================================
@@ -136,11 +144,13 @@ def detect_patterns(
         return []
 
     # Паттерн: candles[-3]=C1, candles[-2]=C2, candles[-1]=C3
-    # Тренд: candles[-8:-3] = 5 свечей перед C1
+    # Тренд: candles[-11:-3] = 8 свечей перед C1
+    # Свинг: candles[-18:-3] = 15 свечей перед C1
     c1 = candles[-3]
     c2 = candles[-2]
     c3 = candles[-1]
-    trend_ctx = candles[-8:-3] if len(candles) >= 8 else candles[:-3]
+    trend_ctx = candles[-11:-3] if len(candles) >= 11 else candles[:-3]
+    swing_ctx = candles[-18:-3] if len(candles) >= 18 else candles[:-3]
 
     if tf_ms > 0:
         if (c2[0] - c1[0] != tf_ms) or (c3[0] - c2[0] != tf_ms):
@@ -150,11 +160,12 @@ def detect_patterns(
     has_volume = len(c1) > 5 and all(len(c) > 5 for c in [c1, c2, c3])
 
     rsi_star = _rsi(cl[:-1], 14)  # RSI на момент закрытия C2 (звезды)
+    rsi_c3 = _rsi(cl, 14)
 
     results = []
     ms = _check_morning_star(
-        trend_ctx, c1, c2, c3,
-        symbol, timeframe, atr_val, rsi_star, ema_val, ema50_val,
+        trend_ctx, swing_ctx, c1, c2, c3,
+        symbol, timeframe, atr_val, rsi_c3, ema_val, ema50_val,
         avg_vol if has_volume else 0.0, has_volume, price
     )
     if ms:
@@ -162,8 +173,8 @@ def detect_patterns(
         results.append(ms)
 
     es = _check_evening_star(
-        trend_ctx, c1, c2, c3,
-        symbol, timeframe, atr_val, rsi_star, ema_val, ema50_val,
+        trend_ctx, swing_ctx, c1, c2, c3,
+        symbol, timeframe, atr_val, rsi_c3, ema_val, ema50_val,
         avg_vol if has_volume else 0.0, has_volume, price
     )
     if es:
@@ -178,9 +189,9 @@ def detect_patterns(
 # ============================================================================
 
 def _check_morning_star(
-    trend_ctx, c1, c2, c3,
+    trend_ctx, swing_ctx, c1, c2, c3,
     symbol: str, timeframe: str,
-    atr: float, rsi_star: float, ema: float, ema50: float,
+    atr: float, rsi: float, ema: float, ema50: float,
     avg_vol: float, has_volume: bool, price: float
 ) -> Optional[PatternResult]:
     o1, h1, l1, cl1 = c1[1], c1[2], c1[3], c1[4]
@@ -215,7 +226,7 @@ def _check_morning_star(
         return None
 
     # C2 открывается на low C1 (крипта без гэпов)
-    if abs(o2 - l1) > atr * 0.05:
+    if abs(o2 - l1) > atr * 0.15:
         return None
 
     # C2 в нижней половине C1
@@ -247,9 +258,10 @@ def _check_morning_star(
     if not _is_downtrend(trend_ctx):
         return None
 
-    # Локальный минимум: low C1 должен быть минимумом контекста
-    recent_low = min(c[3] for c in trend_ctx[-5:]) if len(trend_ctx) >= 5 else l1
-    if l1 > recent_low:
+    # Локальный минимум: pattern low должен быть минимумом контекста
+    pattern_low = min(l1, l2, l3)
+    recent_low = min(c[3] for c in swing_ctx) if len(swing_ctx) else l1
+    if pattern_low > recent_low:
         return None
 
     # Scoring
@@ -266,10 +278,10 @@ def _check_morning_star(
         score += 0.1
         reasons.append("engulfing")
 
-    if rsi_star < 30:
+    if rsi < 35:
         score += 0.15
-        reasons.append(f"RSI_star={rsi_star:.0f}<30")
-    elif rsi_star < 40:
+        reasons.append(f"RSI={rsi:.0f}<35")
+    elif rsi < 45:
         score += 0.05
 
     if is_star:
@@ -289,7 +301,7 @@ def _check_morning_star(
     description = _make_description(
         "\u2600\ufe0f \u0423\u0442\u0440\u0435\u043d\u043d\u044f\u044f \u0437\u0432\u0435\u0437\u0434\u0430",
         confidence, score, reasons,
-        o1, cl1, o2, cl2, o3, cl3, atr, rsi_star
+        o1, cl1, o2, cl2, o3, cl3, atr, rsi
     )
     return PatternResult(
         pattern=PatternType.MORNING_STAR,
@@ -306,9 +318,9 @@ def _check_morning_star(
 # ============================================================================
 
 def _check_evening_star(
-    trend_ctx, c1, c2, c3,
+    trend_ctx, swing_ctx, c1, c2, c3,
     symbol: str, timeframe: str,
-    atr: float, rsi_star: float, ema: float, ema50: float,
+    atr: float, rsi: float, ema: float, ema50: float,
     avg_vol: float, has_volume: bool, price: float
 ) -> Optional[PatternResult]:
     o1, h1, l1, cl1 = c1[1], c1[2], c1[3], c1[4]
@@ -343,7 +355,7 @@ def _check_evening_star(
         return None
 
     # C2 открывается на high C1 (крипта без гэпов)
-    if abs(o2 - h1) > atr * 0.05:
+    if abs(o2 - h1) > atr * 0.15:
         return None
 
     # C2 в верхней половине C1
@@ -375,9 +387,10 @@ def _check_evening_star(
     if not _is_uptrend(trend_ctx):
         return None
 
-    # Локальный максимум: high C1 должен быть максимумом контекста
-    recent_high = max(c[2] for c in trend_ctx[-5:]) if len(trend_ctx) >= 5 else h1
-    if h1 < recent_high:
+    # Локальный максимум: pattern high должен быть максимумом контекста
+    pattern_high = max(h1, h2, h3)
+    recent_high = max(c[2] for c in swing_ctx) if len(swing_ctx) else h1
+    if pattern_high < recent_high:
         return None
 
     # Scoring
@@ -394,10 +407,10 @@ def _check_evening_star(
         score += 0.1
         reasons.append("engulfing")
 
-    if rsi_star > 70:
+    if rsi > 65:
         score += 0.15
-        reasons.append(f"RSI_star={rsi_star:.0f}>70")
-    elif rsi_star > 60:
+        reasons.append(f"RSI={rsi:.0f}>65")
+    elif rsi > 55:
         score += 0.05
 
     if is_star:
@@ -417,7 +430,7 @@ def _check_evening_star(
     description = _make_description(
         "\U0001f319 \u0412\u0435\u0447\u0435\u0440\u043d\u044f\u044f \u0437\u0432\u0435\u0437\u0434\u0430",
         confidence, score, reasons,
-        o1, cl1, o2, cl2, o3, cl3, atr, rsi_star
+        o1, cl1, o2, cl2, o3, cl3, atr, rsi
     )
     return PatternResult(
         pattern=PatternType.EVENING_STAR,
